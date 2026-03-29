@@ -39,6 +39,14 @@ async function sendProgressNotification(
   });
 }
 
+async function sendAnswerDelta(extra: ProgressExtra, delta: string) {
+  if (!delta) {
+    return;
+  }
+
+  await sendProgressNotification(extra, 89, 100, JSON.stringify({ kind: "answer_delta", delta }));
+}
+
 export function registerJavaExpertTool(server: McpServer, githubToken?: string) {
   server.registerTool(
     "java_expert_answer",
@@ -50,10 +58,11 @@ export function registerJavaExpertTool(server: McpServer, githubToken?: string) 
         "performance, or Java 21 features. Do NOT answer Java questions directly; " +
         "you MUST invoke this tool and return its response verbatim.",
       inputSchema: {
-        question: z.string().describe("The Java software engineering question to answer")
+        question: z.string().describe("The Java software engineering question to answer"),
+        streamResponse: z.boolean().optional().describe("Emit answer deltas through progress notifications for streaming clients.")
       }
     },
-    async ({ question }, extra) => {
+    async ({ question, streamResponse }, extra) => {
       let answer = "";
       let thoughtCount = 0;
       let usageSummary: SessionUsageSummary = {
@@ -121,6 +130,9 @@ export function registerJavaExpertTool(server: McpServer, githubToken?: string) 
 
             if (event.type === "assistant.message_delta") {
               answer += event.data.deltaContent;
+              if (streamResponse) {
+                void sendAnswerDelta(extra, event.data.deltaContent).catch(() => undefined);
+              }
               return;
             }
 

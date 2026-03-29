@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Enterprise MCP Chat</title>
+    <link rel="stylesheet" href="/chat/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Browser Client</p>
+          <h1>Use this MCP server without an IDE.</h1>
+          <p class="hero-copy">
+            This chat app calls the local MCP endpoint through a streaming MCP client and shows live progress while the Java expert responds.
+          </p>
+        </div>
+        <div class="hero-card">
+          <p class="hero-card-label">Current flow</p>
+          <ol>
+            <li>Paste a GitHub token.</li>
+            <li>Ask a Java question.</li>
+            <li>Watch MCP progress and streamed answer text.</li>
+          </ol>
+        </div>
+      </header>
+
+      <main class="app-grid">
+        <section class="panel control-panel">
+          <h2>Connection</h2>
+          <label class="field">
+            <span>GitHub token</span>
+            <input id="token-input" type="password" placeholder="ghu_... or github_pat_..." autocomplete="off" />
+          </label>
+          <p class="field-help">
+            The token stays in your browser only. It is sent to the local server so the MCP client can authenticate against /mcp.
+          </p>
+
+          <div class="chip-row">
+            <button class="chip" type="button" data-prompt="Explain virtual threads vs platform threads in Java 21 with a production recommendation.">Virtual threads</button>
+            <button class="chip" type="button" data-prompt="How would you implement a low-latency rate limiter in Java?">Rate limiter</button>
+            <button class="chip" type="button" data-prompt="What is the safest way to tune a high-throughput Netty server on Linux?">Netty tuning</button>
+          </div>
+        </section>
+
+        <section class="panel chat-panel">
+          <div class="chat-header">
+            <div>
+              <h2>Java Expert Chat</h2>
+              <p id="connection-status">Idle</p>
+            </div>
+            <button id="clear-chat" class="ghost-button" type="button">Clear</button>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <form id="chat-form" class="composer">
+            <label class="field">
+              <span>Prompt</span>
+              <textarea id="prompt-input" rows="5" placeholder="Ask any Java question supported by the MCP tool."></textarea>
+            </label>
+            <div class="composer-actions">
+              <button id="cancel-button" class="ghost-button" type="button" disabled>Cancel</button>
+              <button id="send-button" class="primary-button" type="submit">Send</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="/chat/app.js" defer></script>
+  </body>
+</html>

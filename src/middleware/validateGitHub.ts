@@ -1,5 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 
+import { getOAuthProtectedResourceUrl } from "../serverConfig.js";
+
 export async function validateGitHub(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.split(" ")[1];
 
@@ -7,7 +9,7 @@ export async function validateGitHub(req: Request, res: Response, next: NextFunc
     // This challenge header is what VS Code uses to trigger the login popup.
     res.setHeader(
       "WWW-Authenticate",
-      'Bearer resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource"'
+      `Bearer resource_metadata="${getOAuthProtectedResourceUrl(req)}"`
     );
     res.status(401).json({ error: "Authentication Required" });
     return;

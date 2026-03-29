@@ -3,7 +3,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import dotenv from "dotenv";
 
+import { registerChatApp } from "./chat/registerChatApp.js";
 import { validateGitHub } from "./middleware/validateGitHub.js";
+import { getMcpEndpointUrl, port } from "./serverConfig.js";
 import { registerJavaExpertTool } from "./tools/registerJavaExpertTool.js";
 import { registerStatusTool } from "./tools/registerStatusTool.js";
 
@@ -18,6 +20,11 @@ if (!process.env.CLIENT_ID) {
 
 const app = express();
 app.use(express.json());
+registerChatApp(app);
+
+app.get("/", (_req, res) => {
+  res.redirect("/chat");
+});
 
 // --- 1. WELL-KNOWN ENDPOINTS ---
 
@@ -25,13 +32,13 @@ app.get("/.well-known/mcp.json", (req, res) => {
   res.json({
     mcp_version: "2025-11-25",
     server_info: { name: "enterprise-mcp", version: "1.0.0" },
-    endpoints: [{ url: "http://localhost:3000/mcp", transport: "streamable-http", auth_type: "oauth2" }]
+    endpoints: [{ url: getMcpEndpointUrl(req), transport: "streamable-http", auth_type: "oauth2" }]
   });
 });
 
 app.get("/.well-known/oauth-protected-resource", (req, res) => {
   res.json({
-    "resource": "http://localhost:3000/mcp",
+    "resource": getMcpEndpointUrl(req),
     "authorization_servers": [
         "https://github.com/login/oauth"
     ],
@@ -73,4 +80,4 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-app.listen(3000, () => console.log("Enterprise MCP Server running on :3000"));
+app.listen(port, () => console.log(`Enterprise MCP Server running on :${port}`));

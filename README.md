@@ -2,6 +2,8 @@
 
 This project is a runnable TypeScript example of how to protect an MCP server using GitHub as an OAuth authorization server. It teaches the full `.well-known` discovery pattern: how MCP clients like VS Code and IntelliJ find your authorization server automatically, why scopes and grant types matter, and how the browser-based login popup works end-to-end.
 
+It also now includes a small browser chat app so users without VS Code or IntelliJ can still use the MCP-backed Java expert through a normal web page.
+
 The server exposes two MCP tools: `get_status` (returns server health, Copilot quota usage, and today's locally observed usage) and `java_expert_answer` (forwards a Java question to a Copilot session with Java-specific instructions).
 
 ---
@@ -243,7 +245,20 @@ npm run build
 npm start
 ```
 
-The server listens on `http://localhost:3000`.
+The server listens on `http://localhost:3000` by default, or on `PORT` if you override it.
+
+## Browser chat app
+
+Once the server is running, open `http://localhost:3000/chat` in a browser.
+
+The page is a thin client over the same MCP server:
+
+1. The browser sends your prompt and GitHub token to `POST /chat/api/stream`.
+2. The Express app creates an MCP `Client` with `StreamableHTTPClientTransport` and connects to its own `/mcp` endpoint.
+3. The Java tool is called with `streamResponse: true`, so progress notifications can carry answer deltas.
+4. The browser receives those updates over a simple SSE response and renders them as a live chat transcript.
+
+This keeps the browser app small while still exercising a real MCP client implementation with streaming progress support.
 
 ## VS Code MCP configuration
 
@@ -273,6 +288,13 @@ From the MCP user's perspective, setup is intentionally simple:
 
 For IntelliJ-style MCP clients, the same discovery endpoints allow the IDE to open its own login flow automatically once the MCP URL is configured.
 
+For the browser chat app, setup is simpler but less polished today:
+
+1. Start the server with `npm run build && npm start`.
+2. Open `http://localhost:3000/chat`.
+3. Paste a GitHub token with the scopes your server needs.
+4. Ask a Java question in the chat box.
+
 ## Tool behavior
 
 ### `get_status`
@@ -289,6 +311,8 @@ This tool creates a Copilot client session using `@github/copilot-sdk`, injects 
 
 Progress updates are emitted through MCP `notifications/progress` while the tool runs; the final tool response contains only the answer text.
 
+When `streamResponse: true` is passed, the tool also emits answer deltas through progress notifications so streaming clients can render text incrementally before the final tool result arrives.
+
 Reasoning-driven progress notifications are currently sent as short step messages with a truncated preview of reasoning deltas.
 
 The current implementation uses:
@@ -301,8 +325,11 @@ The current implementation uses:
 
 ```text
 src/
+  chat/
+    registerChatApp.ts            Browser chat route and MCP client bridge
   index.ts                         Express app, MCP server setup, tool registration
   javaExpertInstructions.ts        Java-specific system instructions for Copilot sessions
+  serverConfig.ts                  Shared base URL and port helpers
   middleware/
     validateGitHub.ts             GitHub bearer token validation middleware
   tools/
@@ -310,11 +337,16 @@ src/
     registerStatusTool.ts         Status tool registration with Copilot quota lookup
   usage/
     dailyUsageStore.ts            Local per-day Copilot usage ledger for this server
+public/
+  chat/
+    app.js                        Browser chat client
+    index.html                    Chat UI shell
+    styles.css                    Chat UI styles
 ```
 
 ## Notes and limitations
 
-- The server URL and OAuth metadata currently use hardcoded `http://localhost:3000` values.
+- The browser app currently asks the user to paste a GitHub token. It does not yet drive the full OAuth browser flow automatically.
 - There is no development watch script yet; use `npm run build` before `npm start`.
 - `POST /mcp` is the only authenticated endpoint. The discovery endpoints are public.
 - The README includes production-style examples for public deployment, but the checked-in code is a local example server.
