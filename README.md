@@ -1,5 +1,7 @@
 # MCP OAuth with `.well-known` Discovery
 
+[![SafeSkill 93/100](https://img.shields.io/badge/SafeSkill-93%2F100_Verified%20Safe-brightgreen)](https://safeskill.dev/scan/aranga-nana-basic-mcp-server-auth)
+
 This project is a runnable TypeScript example of how to protect an MCP server using GitHub as an OAuth authorization server. It teaches the full `.well-known` discovery pattern: how MCP clients like VS Code and IntelliJ find your authorization server automatically, why scopes and grant types matter, and how the browser-based login popup works end-to-end.
 
 The server exposes two MCP tools: `get_status` (returns server health, Copilot quota usage, and today's locally observed usage) and `java_expert_answer` (forwards a Java question to a Copilot session with Java-specific instructions).
