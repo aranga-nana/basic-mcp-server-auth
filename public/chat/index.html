@@ -19,7 +19,7 @@
         <div class="hero-card">
           <p class="hero-card-label">Current flow</p>
           <ol>
-            <li>Paste a GitHub token.</li>
+            <li>Sign in with GitHub.</li>
             <li>Ask a Java question.</li>
             <li>Watch MCP progress and streamed answer text.</li>
           </ol>
@@ -29,13 +29,19 @@
       <main class="app-grid">
         <section class="panel control-panel">
           <h2>Connection</h2>
-          <label class="field">
-            <span>GitHub token</span>
-            <input id="token-input" type="password" placeholder="ghu_... or github_pat_..." autocomplete="off" />
-          </label>
-          <p class="field-help">
-            The token stays in your browser only. It is sent to the local server so the MCP client can authenticate against /mcp.
-          </p>
+
+          <div id="oauth-login-container">
+            <button id="oauth-login" class="primary-button" type="button">Sign in with GitHub</button>
+            <p class="field-help">Sign in securely with GitHub to use the chat. No token pasting required.</p>
+          </div>
+
+          <details class="dev-console" open>
+            <summary>Developer Console</summary>
+            <div class="dev-console-actions">
+              <button id="clear-dev-console" class="ghost-button" type="button">Clear logs</button>
+            </div>
+            <pre id="dev-log" class="dev-log" aria-live="polite"></pre>
+          </details>
 
           <div class="chip-row">
             <button class="chip" type="button" data-prompt="Explain virtual threads vs platform threads in Java 21 with a production recommendation.">Virtual threads</button>
@@ -69,6 +75,9 @@
       </main>
     </div>
 
-    <script src="/chat/app.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/oauth4webapi@3.8.2/build/index.js" defer></script>
+    <script type="module" src="/chat/app.js"></script>
   </body>
 </html>

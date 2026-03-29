@@ -63,6 +63,45 @@ function readBodyString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readOAuthTokenError(payload: Record<string, unknown>) {
+  const error = typeof payload.error === "string" ? payload.error : "oauth_error";
+  const description = typeof payload.error_description === "string" ? payload.error_description : "";
+  return description ? `${error}: ${description}` : error;
+}
+
+function buildToolQuestion(prompt: string, conversationContext: string) {
+  if (!conversationContext) {
+    return prompt;
+  }
+
+  return [
+    "Use this conversation context to answer the latest user question.",
+    "If context conflicts with the latest question, prioritize the latest question.",
+    "",
+    "Conversation context:",
+    conversationContext,
+    "",
+    "Latest user question:",
+    prompt
+  ].join("\n");
+}
+
+function oauthHint(errorCode: string, hasClientSecret: boolean) {
+  if (errorCode === "incorrect_client_credentials" && !hasClientSecret) {
+    return "Set CLIENT_SECRET in .env.local and restart the server. GitHub OAuth app web flows usually require the client secret on token exchange.";
+  }
+
+  if (errorCode === "bad_verification_code") {
+    return "Authorization code expired or was reused. Retry sign-in and complete the flow once.";
+  }
+
+  if (errorCode === "redirect_uri_mismatch") {
+    return "The redirect URI used by the browser must be added to the GitHub OAuth app callback URLs.";
+  }
+
+  return "";
+}
+
 export function registerChatApp(app: Express) {
   const chatUiDir = resolve(process.cwd(), "public/chat");
   const router = express.Router();
@@ -77,9 +116,74 @@ export function registerChatApp(app: Express) {
     res.json({ ok: true });
   });
 
+  router.post("/api/oauth/token", async (req: Request, res: Response) => {
+    const code = readBodyString(req.body?.code);
+    const codeVerifier = readBodyString(req.body?.codeVerifier);
+    const redirectUri = readBodyString(req.body?.redirectUri);
+
+    if (!code || !codeVerifier || !redirectUri) {
+      res.status(400).json({ error: "code, codeVerifier and redirectUri are required." });
+      return;
+    }
+
+    if (!process.env.CLIENT_ID) {
+      res.status(500).json({ error: "CLIENT_ID is not configured." });
+      return;
+    }
+
+    const body = new URLSearchParams({
+      client_id: process.env.CLIENT_ID,
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier
+    });
+
+    if (process.env.CLIENT_SECRET) {
+      body.set("client_secret", process.env.CLIENT_SECRET);
+    }
+
+    try {
+      const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body
+      });
+
+      const payload = (await tokenResponse.json()) as Record<string, unknown>;
+      const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
+      const providerError = typeof payload.error === "string" ? payload.error : "";
+      const providerErrorDescription = typeof payload.error_description === "string" ? payload.error_description : "";
+      const hint = oauthHint(providerError, Boolean(process.env.CLIENT_SECRET));
+
+      if (!tokenResponse.ok || !accessToken) {
+        res.status(400).json({
+          error: readOAuthTokenError(payload),
+          hint,
+          provider: {
+            error: providerError,
+            error_description: providerErrorDescription
+          }
+        });
+        return;
+      }
+
+      res.json({
+        accessToken,
+        tokenType: typeof payload.token_type === "string" ? payload.token_type : "bearer",
+        scope: typeof payload.scope === "string" ? payload.scope : ""
+      });
+    } catch (error) {
+      res.status(502).json({ error: errorMessage(error) });
+    }
+  });
+
   router.post("/api/stream", async (req: Request, res: Response) => {
     const prompt = readBodyString(req.body?.prompt);
     const githubToken = readBodyString(req.body?.githubToken);
+    const conversationContext = readBodyString(req.body?.conversationContext);
 
     if (!prompt) {
       res.status(400).json({ error: "Prompt is required." });
@@ -108,7 +212,8 @@ export function registerChatApp(app: Express) {
 
     let streamedAnswer = "";
     const abortRequest = () => abortController.abort();
-    req.on("close", abortRequest);
+    res.on("close", abortRequest);
+    req.on("aborted", abortRequest);
 
     try {
       sendSseEvent(res, "status", { message: "Connecting to the MCP server" });
@@ -119,7 +224,7 @@ export function registerChatApp(app: Express) {
         {
           name: "java_expert_answer",
           arguments: {
-            question: prompt,
+            question: buildToolQuestion(prompt, conversationContext),
             streamResponse: true
           }
         },
@@ -158,7 +263,8 @@ export function registerChatApp(app: Express) {
         sendSseEvent(res, "error", { message: errorMessage(error) });
       }
     } finally {
-      req.off("close", abortRequest);
+      res.off("close", abortRequest);
+      req.off("aborted", abortRequest);
       await transport.close().catch(() => undefined);
       res.end();
     }

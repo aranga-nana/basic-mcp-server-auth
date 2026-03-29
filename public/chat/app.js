@@ -1,7 +1,21 @@
-const storageKey = "enterprise-mcp-chat-token";
-const chatApiBase = "/chat/api";
+import {
+  chatApiBase,
+  oauthCallbackPath,
+  sessionTokenKey,
+  conversationMemoryKey,
+  maxRecentTurns,
+  maxContextChars
+} from "./features/config.js";
+import { createDevLogger } from "./features/logger.js";
+import { renderMarkdown } from "./features/markdown-renderer.js";
+import { createMessageView } from "./features/message-view.js";
+import { createUiState } from "./features/ui-state.js";
+import { createConversationMemoryStore } from "./features/conversation-memory.js";
+import { createChatClient } from "./features/chat-client.js";
+import { createAuthManager } from "./features/auth-flow.js";
 
-const tokenInput = document.querySelector("#token-input");
+// DOM references are collected once during startup so event handlers can stay lean.
+const oauthLoginButton = document.querySelector("#oauth-login");
 const promptInput = document.querySelector("#prompt-input");
 const form = document.querySelector("#chat-form");
 const messages = document.querySelector("#messages");
@@ -10,223 +24,200 @@ const clearButton = document.querySelector("#clear-chat");
 const cancelButton = document.querySelector("#cancel-button");
 const sendButton = document.querySelector("#send-button");
 const promptButtons = document.querySelectorAll("[data-prompt]");
+const devLog = document.querySelector("#dev-log");
+const clearDevConsoleButton = document.querySelector("#clear-dev-console");
+const oauthLoginContainer = document.querySelector("#oauth-login-container");
 
-let currentController;
+const logger = createDevLogger(devLog);
 
-function setStatus(text) {
-  statusLabel.textContent = text;
-}
+const memoryStore = createConversationMemoryStore({
+  storage: window.sessionStorage,
+  storageKey: conversationMemoryKey,
+  maxRecentTurns,
+  maxContextChars
+});
 
-function restoreToken() {
-  const saved = window.localStorage.getItem(storageKey);
-  if (saved) {
-    tokenInput.value = saved;
-  }
-}
+const chatClient = createChatClient({
+  chatApiBase,
+  logger
+});
 
-function persistToken() {
-  const token = tokenInput.value.trim();
-  if (!token) {
-    window.localStorage.removeItem(storageKey);
-    return;
-  }
+const uiState = createUiState({
+  statusLabel,
+  cancelButton,
+  sendButton,
+  oauthLoginContainer,
+  hasPendingRequest: () => chatClient.hasPendingRequest()
+});
 
-  window.localStorage.setItem(storageKey, token);
-}
+const messageView = createMessageView({
+  messagesElement: messages,
+  renderMarkdown,
+  setStatus: uiState.setStatus,
+  logger
+});
 
-function createMessage(role, initialText) {
-  const wrapper = document.createElement("article");
-  wrapper.className = `message ${role}`;
+const auth = createAuthManager({
+  chatApiBase,
+  oauthCallbackPath,
+  sessionTokenKey,
+  logger,
+  onTokenChanged: uiState.setAuthUiState
+});
 
-  const meta = document.createElement("span");
-  meta.className = "message-meta";
-  meta.textContent = role === "user" ? "You" : "Java expert";
+async function sendPromptWithRetry(prompt) {
+  const token = auth.getAccessToken();
+  messageView.addUserMessage(prompt);
+  const assistantMessage = messageView.addAssistantMessage("");
 
-  const content = document.createElement("div");
-  content.textContent = initialText;
+  messageView.updateMessageStatus(assistantMessage, "Connecting...");
+  uiState.setStatus("Running");
 
-  const status = document.createElement("div");
-  status.className = "message-status";
-
-  wrapper.append(meta, content, status);
-  messages.append(wrapper);
-  messages.scrollTop = messages.scrollHeight;
-
-  return { wrapper, content, status };
-}
-
-function updateMessageStatus(message, text) {
-  message.status.textContent = text;
-}
-
-function appendAssistantDelta(message, delta) {
-  message.content.textContent += delta;
-  messages.scrollTop = messages.scrollHeight;
-}
-
-function parseSseEvent(block) {
-  const lines = block.split("\n");
-  let event = "message";
-  const dataLines = [];
-
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim();
-      continue;
+  try {
+    return await chatClient.streamChat({
+      prompt,
+      githubToken: token,
+      conversationContext: memoryStore.buildContext(),
+      onEvent: messageView.createStreamEventHandler(assistantMessage)
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/403|401|Invalid|Expired Token/i.test(message)) {
+      auth.clearAccessToken();
+      throw new Error("Session expired. Please sign in again.");
     }
 
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trim());
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return undefined;
-  }
-
-  return {
-    event,
-    data: JSON.parse(dataLines.join("\n"))
-  };
-}
-
-async function streamChat(prompt, githubToken) {
-  currentController = new AbortController();
-  cancelButton.disabled = false;
-  sendButton.disabled = true;
-
-  createMessage("user", prompt);
-  const assistantMessage = createMessage("assistant", "");
-  updateMessageStatus(assistantMessage, "Connecting...");
-  setStatus("Running");
-
-  const response = await fetch(`${chatApiBase}/stream`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ prompt, githubToken }),
-    signal: currentController.signal
-  });
-
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => ({ error: "Request failed." }));
-    throw new Error(payload.error || `Request failed with ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() || "";
-
-    for (const part of parts) {
-      const payload = parseSseEvent(part);
-      if (!payload) {
-        continue;
-      }
-
-      if (payload.event === "status") {
-        updateMessageStatus(assistantMessage, payload.data.message || "Working...");
-        setStatus(payload.data.message || "Working");
-        continue;
-      }
-
-      if (payload.event === "progress") {
-        updateMessageStatus(assistantMessage, payload.data.message || `Progress ${payload.data.progress}%`);
-        setStatus(payload.data.message || "Working");
-        continue;
-      }
-
-      if (payload.event === "delta") {
-        appendAssistantDelta(assistantMessage, payload.data.delta || "");
-        updateMessageStatus(assistantMessage, "Streaming response...");
-        continue;
-      }
-
-      if (payload.event === "replace") {
-        assistantMessage.content.textContent = payload.data.text || "";
-        continue;
-      }
-
-      if (payload.event === "done") {
-        if (!assistantMessage.content.textContent && payload.data.text) {
-          assistantMessage.content.textContent = payload.data.text;
-        }
-        updateMessageStatus(assistantMessage, "Complete");
-        setStatus("Idle");
-        continue;
-      }
-
-      if (payload.event === "error") {
-        updateMessageStatus(assistantMessage, payload.data.message || "Request failed.");
-        setStatus("Error");
-      }
-    }
+    throw error;
   }
 }
 
-form.addEventListener("submit", async (event) => {
+async function handleSubmit(event) {
   event.preventDefault();
 
   const prompt = promptInput.value.trim();
-  const githubToken = tokenInput.value.trim();
+  logger.log("chat", "submit requested", {
+    hasAccessToken: Boolean(auth.getAccessToken()),
+    promptLength: prompt.length
+  });
 
-  if (!githubToken) {
-    setStatus("GitHub token required");
-    tokenInput.focus();
+  // A page refresh should not force a new login when sessionStorage still has a token.
+  auth.restoreTokenFromStorage();
+
+  if (!auth.getAccessToken()) {
+    uiState.setStatus("Sign in required");
+    logger.log("chat", "submit blocked: missing token", {});
     return;
   }
 
   if (!prompt) {
-    setStatus("Prompt required");
+    uiState.setStatus("Prompt required");
     promptInput.focus();
     return;
   }
 
-  persistToken();
   promptInput.value = "";
+  uiState.setComposerBusy(true);
 
   try {
-    await streamChat(prompt, githubToken);
+    memoryStore.addTurn("user", prompt);
+    const assistantText = await sendPromptWithRetry(prompt);
+    memoryStore.addTurn("assistant", assistantText);
   } catch (error) {
-    const assistantMessage = createMessage("assistant", "");
-    updateMessageStatus(assistantMessage, error instanceof Error ? error.message : String(error));
-    setStatus("Error");
+    const message = error instanceof Error ? error.message : String(error);
+    memoryStore.addTurn("assistant", message);
+    messageView.showAssistantError(message);
+    uiState.setStatus("Error");
   } finally {
-    currentController = undefined;
-    cancelButton.disabled = true;
-    sendButton.disabled = false;
-    messages.scrollTop = messages.scrollHeight;
+    chatClient.clearPendingRequest();
+    uiState.setComposerBusy(false);
+    uiState.setAuthUiState(auth.getAccessToken());
+    messageView.scrollToBottom();
   }
-});
+}
 
-cancelButton.addEventListener("click", () => {
-  currentController?.abort();
-  setStatus("Cancelled");
-});
+function registerEventHandlers() {
+  form.addEventListener("submit", handleSubmit);
 
-clearButton.addEventListener("click", () => {
-  messages.innerHTML = "";
-  setStatus("Idle");
-});
-
-promptButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    promptInput.value = button.getAttribute("data-prompt") || "";
-    promptInput.focus();
+  cancelButton.addEventListener("click", () => {
+    chatClient.cancel();
+    uiState.setStatus("Cancelled");
   });
-});
 
-tokenInput.addEventListener("change", persistToken);
+  clearButton.addEventListener("click", () => {
+    messageView.clear();
+    memoryStore.clear();
+    uiState.setStatus("Idle");
+  });
 
-restoreToken();
-setStatus("Idle");
+  promptButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      promptInput.value = button.getAttribute("data-prompt") || "";
+      promptInput.focus();
+    });
+  });
+
+  if (clearDevConsoleButton && devLog) {
+    clearDevConsoleButton.addEventListener("click", () => {
+      devLog.textContent = "";
+    });
+  }
+
+  window.addEventListener("error", (event) => {
+    logger.log("browser", "uncaught error", { message: event.message });
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    logger.log("browser", "unhandled rejection", {
+      reason: String(event.reason)
+    });
+  });
+
+  if (oauthLoginButton) {
+    oauthLoginButton.addEventListener("click", async () => {
+      uiState.setStatus("Discovering OAuth config...");
+      oauthLoginButton.disabled = true;
+
+      try {
+        const config = await auth.discoverOAuthConfig();
+        uiState.setStatus("Opening GitHub login...");
+        await auth.startOAuthPopupFlow(config);
+        uiState.setStatus("Signed in");
+        logger.log("oauth", "signin successful", { tokenReceived: true });
+      } catch (error) {
+        uiState.setStatus(error instanceof Error ? error.message : "Login failed");
+        logger.log("oauth", "signin failed", {
+          message: error instanceof Error ? error.message : String(error)
+        });
+      } finally {
+        oauthLoginButton.disabled = false;
+      }
+    });
+  }
+}
+
+function initializeApp() {
+  uiState.setStatus("Idle");
+  logger.log("app", "chat app initialized", {
+    apiBase: chatApiBase,
+    callbackPath: oauthCallbackPath
+  });
+
+  const loadedMemory = memoryStore.load();
+  logger.log("memory", "conversation memory initialized", {
+    summaryChars: loadedMemory.summary.length,
+    turns: loadedMemory.turns.length
+  });
+
+  auth.restoreTokenFromStorage();
+  uiState.setAuthUiState(auth.getAccessToken());
+  if (auth.getAccessToken()) {
+    uiState.setStatus("Signed in");
+  } else {
+    uiState.setStatus("Idle");
+    logger.log("auth", "no token in session", { hasAccessToken: false });
+  }
+
+  registerEventHandlers();
+}
+
+initializeApp();
